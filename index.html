@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Pro Live Mic (Media Override)</title>
+  <title>Pro Live Mic (Player Fix)</title>
   <style>
     body {
       font-family: system-ui, sans-serif;
@@ -13,9 +13,7 @@
       color: #f1f1f1;
       border-radius: 12px;
     }
-    h2 { text-align: center; margin-bottom: 5px; color: #3b82f6; }
-    p.subtitle { text-align: center; color: #a1a1aa; font-size: 14px; margin-bottom: 24px; }
-    
+    h2 { text-align: center; color: #3b82f6; margin-bottom: 24px; }
     .btn {
       display: block;
       width: 100%;
@@ -25,108 +23,86 @@
       border: none;
       border-radius: 8px;
       cursor: pointer;
-      margin-bottom: 12px;
-      transition: 0.2s;
+      background: #22c55e;
+      color: #000;
     }
-    .btn-wake { background: #eab308; color: #000; }
-    .btn-mic { background: #22c55e; color: #000; }
-    .btn-mic.active { background: #ef4444; color: #fff; }
-    
+    .btn.active {
+      background: #ef4444;
+      color: #fff;
+    }
     .alert {
       background: #1e1e1e;
       padding: 12px;
       border-radius: 8px;
       font-size: 13px;
-      color: #fbbf24;
+      color: #a1a1aa;
       margin-bottom: 20px;
-      border-left: 4px solid #fbbf24;
     }
   </style>
 </head>
 <body>
 
-  <h2>Web PA Override</h2>
-  <p class="subtitle">Forced Bluetooth Media Routing</p>
-
+  <h2>Web PA (Media Route Fix)</h2>
+  
   <div class="alert">
-    <strong>Step 1:</strong> Tap "Wake Speaker" until you hear a beep from the Zeb-County. Do not skip this.<br><br>
-    <strong>Step 2:</strong> Tap "Start Mic".
+    This version routes your voice through a hidden web player to force Android to use the Bluetooth Media channel.
   </div>
 
-  <button class="btn btn-wake" onclick="wakeSpeaker()">1. Wake Speaker (Force Media Mode)</button>
-  <button id="toggleBtn" class="btn btn-mic" onclick="toggleMic()">2. Start Mic</button>
+  <button id="toggleBtn" class="btn" onclick="toggleMic()">Start Mic</button>
+  
+  <!-- This hidden audio player is the secret to tricking Android -->
+  <audio id="liveOutput" autoplay playsinline style="display:none;"></audio>
 
   <script>
     let audioCtx = null;
     let stream = null;
     let isRunning = false;
 
-    // This function forces the OS to open the A2DP (High Quality Music) Bluetooth channel
-    function wakeSpeaker() {
-      const tempCtx = new (window.AudioContext || window.webkitAudioContext)();
-      const osc = tempCtx.createOscillator();
-      const gain = tempCtx.createGain();
-      
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(880, tempCtx.currentTime); // A high beep
-      gain.gain.setValueAtTime(0.1, tempCtx.currentTime);
-      
-      osc.connect(gain);
-      gain.connect(tempCtx.destination);
-      
-      osc.start();
-      osc.stop(tempCtx.currentTime + 0.3); // Play for 1/3 of a second
-    }
-
     async function toggleMic() {
       const btn = document.getElementById('toggleBtn');
+      const audioPlayer = document.getElementById('liveOutput');
 
       if (!isRunning) {
         try {
-          // Request mic access
+          // Get raw mic access
           stream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-              echoCancellation: false,
-              noiseSuppression: false, 
-              autoGainControl: false,
-              latency: 0
-            }
+            audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, latency: 0 }
           });
 
-          // Initialize context
-          audioCtx = new (window.AudioContext || window.webkitAudioContext)({
-            latencyHint: "interactive",
-            sampleRate: 44100
-          });
-          
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
           const source = audioCtx.createMediaStreamSource(stream);
 
-          // Build audio chain: Mic -> Compressor (Safety Limiter) -> Output
+          // Volume Boost & Safety Compressor
+          const gainNode = audioCtx.createGain();
+          gainNode.gain.value = 4.0;
+          
           const compressor = audioCtx.createDynamicsCompressor();
           compressor.threshold.value = -24; 
-          compressor.knee.value = 30;       
           compressor.ratio.value = 12;      
-          compressor.attack.value = 0.003;  
-          compressor.release.value = 0.25;  
-          
-          // Boost volume safely
-          const gainNode = audioCtx.createGain();
-          gainNode.gain.value = 4.0; // 4x default boost
+
+          // THE HACK: Create a fake media destination instead of the raw device speaker
+          const mediaDest = audioCtx.createMediaStreamDestination();
 
           source.connect(gainNode);
           gainNode.connect(compressor);
-          compressor.connect(audioCtx.destination);
+          compressor.connect(mediaDest);
+
+          // Feed the processed audio into the hidden HTML5 audio element
+          audioPlayer.srcObject = mediaDest.stream;
+          await audioPlayer.play();
 
           btn.innerText = "Stop Mic";
           btn.classList.add('active');
           isRunning = true;
         } catch (err) {
-          alert("Microphone denied or not supported.");
+          alert("Microphone error. Ensure permissions are granted.");
         }
       } else {
         if (stream) stream.getTracks().forEach(t => t.stop());
         if (audioCtx) audioCtx.close();
-        btn.innerText = "2. Start Mic";
+        audioPlayer.srcObject = null;
+        
+        btn.innerText = "Start Mic";
         btn.classList.remove('active');
         isRunning = false;
       }
