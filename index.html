@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Pro Live Mic</title>
+  <title>Pro Live Mic (Low Latency)</title>
   <style>
     body {
       font-family: system-ui, sans-serif;
@@ -95,51 +95,43 @@
 
       if (!isRunning) {
         try {
-          // 1. Ask for mic and force browser's built-in AI Noise Suppression
-       // Request raw mic access with heavy processing disabled for speed
-stream = await navigator.mediaDevices.getUserMedia({
-  audio: {
-    echoCancellation: false,  // Turning this off speeds up processing
-    noiseSuppression: false,  // Turning this off speeds up processing
-    autoGainControl: false,
-    latency: 0                // Request lowest possible hardware latency
-  }
-});
+          // LOW LATENCY FIX: Processing disabled for maximum speed
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              echoCancellation: false,
+              noiseSuppression: false, 
+              autoGainControl: false,
+              latency: 0
+            }
+          });
 
-// Force the Audio engine to prioritize real-time interaction
-audioCtx = new (window.AudioContext || window.webkitAudioContext)({
-       const source = audioCtx.createMediaStreamSource(stream);
+          // LOW LATENCY FIX: Force interactive latency hint
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)({
+            latencyHint: "interactive",
+            sampleRate: 44100
+          });
+          
+          const source = audioCtx.createMediaStreamSource(stream);
 
-  latencyHint: "interactive",
-  sampleRate: 44100
-});
-
-          // 2. High-pass filter to cut out background rumble/fans
           rumbleFilter = audioCtx.createBiquadFilter();
           rumbleFilter.type = "highpass";
           rumbleFilter.frequency.value = parseFloat(document.getElementById('noiseSlider').value);
 
-          // 3. Treble filter for voice clarity
           trebleFilter = audioCtx.createBiquadFilter();
           trebleFilter.type = "highshelf";
           trebleFilter.frequency.value = 3000;
           trebleFilter.gain.value = parseFloat(document.getElementById('trebleSlider').value);
 
-          // 4. Extreme Gain (Volume multiplier)
           gainNode = audioCtx.createGain();
           gainNode.gain.value = parseFloat(document.getElementById('gainSlider').value);
 
-          // 5. Studio Compressor / Limiter
-          // This is the magic trick: it catches the 15x boosted audio and squashes 
-          // harsh peaks so your Zeb-County doesn't crackle or blow a driver.
           compressor = audioCtx.createDynamicsCompressor();
-          compressor.threshold.value = -24; // Catch audio early
-          compressor.knee.value = 30;       // Smooth transition
-          compressor.ratio.value = 12;      // Hard limit on peaks
-          compressor.attack.value = 0.003;  // React instantly
-          compressor.release.value = 0.25;  // Let go naturally
+          compressor.threshold.value = -24; 
+          compressor.knee.value = 30;       
+          compressor.ratio.value = 12;      
+          compressor.attack.value = 0.003;  
+          compressor.release.value = 0.25;  
 
-          // 6. Connect the chain: Mic -> Noise Cut -> Clarity -> Volume Boost -> Limiter -> Speaker
           source.connect(rumbleFilter);
           rumbleFilter.connect(trebleFilter);
           trebleFilter.connect(gainNode);
@@ -164,7 +156,6 @@ audioCtx = new (window.AudioContext || window.webkitAudioContext)({
     function updateGain(val) {
       document.getElementById('gainVal').innerText = val + "x";
       if (gainNode && audioCtx) {
-        // Smoothly transition volume to avoid popping sounds
         gainNode.gain.setTargetAtTime(parseFloat(val), audioCtx.currentTime, 0.1);
       }
     }
