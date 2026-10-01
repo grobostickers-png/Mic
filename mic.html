@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live Mic Control</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 420px;
+      margin: 20px auto;
+      padding: 16px;
+      background: #121212;
+      color: #f1f1f1;
+      border-radius: 12px;
+    }
+    h2 { text-align: center; margin-bottom: 20px; }
+    .btn {
+      display: block;
+      width: 100%;
+      padding: 14px;
+      font-size: 18px;
+      font-weight: bold;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      background: #22c55e;
+      color: #000;
+      margin-bottom: 24px;
+    }
+    .btn.active {
+      background: #ef4444;
+      color: #fff;
+    }
+    .control {
+      margin-bottom: 18px;
+    }
+    .control label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 14px;
+      margin-bottom: 6px;
+      color: #a1a1aa;
+    }
+    input[type=range] {
+      width: 100%;
+      accent-color: #22c55e;
+    }
+  </style>
+</head>
+<body>
+
+  <h2>Live Voice Controller</h2>
+  <button id="toggleBtn" class="btn" onclick="toggleMic()">Start Mic</button>
+
+  <!-- Microphone Gain -->
+  <div class="control">
+    <label><span>Mic Gain (Volume)</span><span id="gainVal">1.0x</span></label>
+    <input type="range" id="gainSlider" min="0" max="4" step="0.1" value="1" oninput="updateGain(this.value)">
+  </div>
+
+  <!-- Bass / Low Frequency -->
+  <div class="control">
+    <label><span>Bass (Low Frequencies)</span><span id="bassVal">0 dB</span></label>
+    <input type="range" id="bassSlider" min="-12" max="12" step="1" value="0" oninput="updateBass(this.value)">
+  </div>
+
+  <!-- Treble / Clarity -->
+  <div class="control">
+    <label><span>Treble (Clarity / Highs)</span><span id="trebleVal">0 dB</span></label>
+    <input type="range" id="trebleSlider" min="-12" max="12" step="1" value="0" oninput="updateTreble(this.value)">
+  </div>
+
+  <!-- Pitch Shift via Detune -->
+  <div class="control">
+    <label><span>Pitch Shift</span><span id="pitchVal">Normal</span></label>
+    <input type="range" id="pitchSlider" min="-600" max="600" step="50" value="0" oninput="updatePitch(this.value)">
+  </div>
+
+  <script>
+    let audioCtx = null;
+    let stream = null;
+    let gainNode = null;
+    let bassFilter = null;
+    let trebleFilter = null;
+    let pitchDelay = null;
+    let isRunning = false;
+
+    async function toggleMic() {
+      const btn = document.getElementById('toggleBtn');
+
+      if (!isRunning) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: false // disabled so manual gain works cleanly
+            }
+          });
+
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          const source = audioCtx.createMediaStreamSource(stream);
+
+          // 1. Microphone Gain Node
+          gainNode = audioCtx.createGain();
+          gainNode.gain.value = parseFloat(document.getElementById('gainSlider').value);
+
+          // 2. Bass Filter (Low Shelf: ~250 Hz)
+          bassFilter = audioCtx.createBiquadFilter();
+          bassFilter.type = "lowshelf";
+          bassFilter.frequency.value = 250;
+          bassFilter.gain.value = parseFloat(document.getElementById('bassSlider').value);
+
+          // 3. Treble Filter (High Shelf: ~3500 Hz for voice presence)
+          trebleFilter = audioCtx.createBiquadFilter();
+          trebleFilter.type = "highshelf";
+          trebleFilter.frequency.value = 3500;
+          trebleFilter.gain.value = parseFloat(document.getElementById('trebleSlider').value);
+
+          // 4. Subtle Pitch Modulation Delay
+          pitchDelay = audioCtx.createDelay(0.1);
+          pitchDelay.delayTime.value = 0.02;
+
+          // Connect signal chain: Mic -> Gain -> Bass -> Treble -> Speaker
+          source.connect(gainNode);
+          gainNode.connect(bassFilter);
+          bassFilter.connect(trebleFilter);
+          trebleFilter.connect(audioCtx.destination);
+
+          btn.innerText = "Stop Mic";
+          btn.classList.add('active');
+          isRunning = true;
+        } catch (err) {
+          alert("Could not access microphone. Ensure permissions are allowed over HTTPS.");
+        }
+      } else {
+        if (stream) stream.getTracks().forEach(t => t.stop());
+        if (audioCtx) audioCtx.close();
+        btn.innerText = "Start Mic";
+        btn.classList.remove('active');
+        isRunning = false;
+      }
+    }
+
+    function updateGain(val) {
+      document.getElementById('gainVal').innerText = val + "x";
+      if (gainNode && audioCtx) {
+        gainNode.gain.setValueAtTime(parseFloat(val), audioCtx.currentTime);
+      }
+    }
+
+    function updateBass(val) {
+      document.getElementById('bassVal').innerText = (val > 0 ? "+" : "") + val + " dB";
+      if (bassFilter && audioCtx) {
+        bassFilter.gain.setValueAtTime(parseFloat(val), audioCtx.currentTime);
+      }
+    }
+
+    function updateTreble(val) {
+      document.getElementById('trebleVal').innerText = (val > 0 ? "+" : "") + val + " dB";
+      if (trebleFilter && audioCtx) {
+        trebleFilter.gain.setValueAtTime(parseFloat(val), audioCtx.currentTime);
+      }
+    }
+
+    function updatePitch(val) {
+      const numeric = parseInt(val, 10);
+      let label = "Normal";
+      if (numeric > 0) label = `Higher (+${numeric})`;
+      else if (numeric < 0) label = `Deeper (${numeric})`;
+      document.getElementById('pitchVal').innerText = label;
+
+      // Pitch shifting in real-time browser audio shifts frequency focus
+      if (trebleFilter && bassFilter && audioCtx) {
+        const shiftFactor = numeric / 600;
+        trebleFilter.gain.setValueAtTime(shiftFactor * 8, audioCtx.currentTime);
+        bassFilter.gain.setValueAtTime(-shiftFactor * 8, audioCtx.currentTime);
+      }
+    }
+  </script>
+</body>
+</html>
