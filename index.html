@@ -96,16 +96,23 @@
       if (!isRunning) {
         try {
           // 1. Ask for mic and force browser's built-in AI Noise Suppression
-          stream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-              echoCancellation: true,
-              noiseSuppression: true, 
-              autoGainControl: false 
-            }
-          });
+       // Request raw mic access with heavy processing disabled for speed
+stream = await navigator.mediaDevices.getUserMedia({
+  audio: {
+    echoCancellation: false,  // Turning this off speeds up processing
+    noiseSuppression: false,  // Turning this off speeds up processing
+    autoGainControl: false,
+    latency: 0                // Request lowest possible hardware latency
+  }
+});
 
-          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-          const source = audioCtx.createMediaStreamSource(stream);
+// Force the Audio engine to prioritize real-time interaction
+audioCtx = new (window.AudioContext || window.webkitAudioContext)({
+       const source = audioCtx.createMediaStreamSource(stream);
+
+  latencyHint: "interactive",
+  sampleRate: 44100
+});
 
           // 2. High-pass filter to cut out background rumble/fans
           rumbleFilter = audioCtx.createBiquadFilter();
