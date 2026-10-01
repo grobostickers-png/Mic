@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Pro Live Mic (Player Fix)</title>
+  <title>Pro Live Mic</title>
   <style>
     body {
       font-family: system-ui, sans-serif;
@@ -13,98 +13,166 @@
       color: #f1f1f1;
       border-radius: 12px;
     }
-    h2 { text-align: center; color: #3b82f6; margin-bottom: 24px; }
+    h2 { text-align: center; margin-bottom: 20px; color: #22c55e; }
     .btn {
       display: block;
       width: 100%;
       padding: 16px;
-      font-size: 18px;
+      font-size: 20px;
       font-weight: bold;
       border: none;
       border-radius: 8px;
       cursor: pointer;
       background: #22c55e;
       color: #000;
+      margin-bottom: 24px;
+      box-shadow: 0 4px 12px rgba(34, 197, 94, 0.4);
     }
     .btn.active {
       background: #ef4444;
       color: #fff;
+      box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
     }
-    .alert {
+    .control {
+      margin-bottom: 22px;
       background: #1e1e1e;
       padding: 12px;
       border-radius: 8px;
-      font-size: 13px;
+    }
+    .control label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 15px;
+      margin-bottom: 10px;
+      font-weight: bold;
+    }
+    .desc {
+      font-size: 12px;
       color: #a1a1aa;
-      margin-bottom: 20px;
+      margin-bottom: 8px;
+      display: block;
+    }
+    input[type=range] {
+      width: 100%;
+      accent-color: #22c55e;
     }
   </style>
 </head>
 <body>
 
-  <h2>Web PA (Media Route Fix)</h2>
-  
-  <div class="alert">
-    This version routes your voice through a hidden web player to force Android to use the Bluetooth Media channel.
+  <h2>Pro PA Microphone</h2>
+  <button id="toggleBtn" class="btn" onclick="toggleMic()">Start Mic</button>
+
+  <div class="control">
+    <label><span>Extreme Volume Boost</span><span id="gainVal">1.0x</span></label>
+    <span class="desc">Boosts voice up to 15x. Safe to use: built-in limiter prevents speaker blowout.</span>
+    <input type="range" id="gainSlider" min="1" max="15" step="0.5" value="1" oninput="updateGain(this.value)">
   </div>
 
-  <button id="toggleBtn" class="btn" onclick="toggleMic()">Start Mic</button>
-  
-  <!-- This hidden audio player is the secret to tricking Android -->
-  <audio id="liveOutput" autoplay playsinline style="display:none;"></audio>
+  <div class="control">
+    <label><span>Background Noise & Rumble Cut</span><span id="noiseVal">90 Hz</span></label>
+    <span class="desc">Slide right to cut out fan noise, AC hum, and wind.</span>
+    <input type="range" id="noiseSlider" min="0" max="300" step="10" value="90" oninput="updateNoise(this.value)">
+  </div>
+
+  <div class="control">
+    <label><span>Voice Clarity (Treble)</span><span id="trebleVal">0 dB</span></label>
+    <span class="desc">Makes words sharper and easier to understand from far away.</span>
+    <input type="range" id="trebleSlider" min="-10" max="12" step="1" value="0" oninput="updateTreble(this.value)">
+  </div>
 
   <script>
     let audioCtx = null;
     let stream = null;
+    let gainNode = null;
+    let rumbleFilter = null;
+    let trebleFilter = null;
+    let compressor = null;
     let isRunning = false;
 
     async function toggleMic() {
       const btn = document.getElementById('toggleBtn');
-      const audioPlayer = document.getElementById('liveOutput');
 
       if (!isRunning) {
         try {
-          // Get raw mic access
+          // 1. Ask for mic and force browser's built-in AI Noise Suppression
           stream = await navigator.mediaDevices.getUserMedia({
-            audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, latency: 0 }
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true, 
+              autoGainControl: false 
+            }
           });
 
           audioCtx = new (window.AudioContext || window.webkitAudioContext)();
           const source = audioCtx.createMediaStreamSource(stream);
 
-          // Volume Boost & Safety Compressor
-          const gainNode = audioCtx.createGain();
-          gainNode.gain.value = 4.0;
-          
-          const compressor = audioCtx.createDynamicsCompressor();
-          compressor.threshold.value = -24; 
-          compressor.ratio.value = 12;      
+          // 2. High-pass filter to cut out background rumble/fans
+          rumbleFilter = audioCtx.createBiquadFilter();
+          rumbleFilter.type = "highpass";
+          rumbleFilter.frequency.value = parseFloat(document.getElementById('noiseSlider').value);
 
-          // THE HACK: Create a fake media destination instead of the raw device speaker
-          const mediaDest = audioCtx.createMediaStreamDestination();
+          // 3. Treble filter for voice clarity
+          trebleFilter = audioCtx.createBiquadFilter();
+          trebleFilter.type = "highshelf";
+          trebleFilter.frequency.value = 3000;
+          trebleFilter.gain.value = parseFloat(document.getElementById('trebleSlider').value);
 
-          source.connect(gainNode);
+          // 4. Extreme Gain (Volume multiplier)
+          gainNode = audioCtx.createGain();
+          gainNode.gain.value = parseFloat(document.getElementById('gainSlider').value);
+
+          // 5. Studio Compressor / Limiter
+          // This is the magic trick: it catches the 15x boosted audio and squashes 
+          // harsh peaks so your Zeb-County doesn't crackle or blow a driver.
+          compressor = audioCtx.createDynamicsCompressor();
+          compressor.threshold.value = -24; // Catch audio early
+          compressor.knee.value = 30;       // Smooth transition
+          compressor.ratio.value = 12;      // Hard limit on peaks
+          compressor.attack.value = 0.003;  // React instantly
+          compressor.release.value = 0.25;  // Let go naturally
+
+          // 6. Connect the chain: Mic -> Noise Cut -> Clarity -> Volume Boost -> Limiter -> Speaker
+          source.connect(rumbleFilter);
+          rumbleFilter.connect(trebleFilter);
+          trebleFilter.connect(gainNode);
           gainNode.connect(compressor);
-          compressor.connect(mediaDest);
-
-          // Feed the processed audio into the hidden HTML5 audio element
-          audioPlayer.srcObject = mediaDest.stream;
-          await audioPlayer.play();
+          compressor.connect(audioCtx.destination);
 
           btn.innerText = "Stop Mic";
           btn.classList.add('active');
           isRunning = true;
         } catch (err) {
-          alert("Microphone error. Ensure permissions are granted.");
+          alert("Could not access microphone. Ensure permissions are allowed over HTTPS.");
         }
       } else {
         if (stream) stream.getTracks().forEach(t => t.stop());
         if (audioCtx) audioCtx.close();
-        audioPlayer.srcObject = null;
-        
         btn.innerText = "Start Mic";
         btn.classList.remove('active');
         isRunning = false;
+      }
+    }
+
+    function updateGain(val) {
+      document.getElementById('gainVal').innerText = val + "x";
+      if (gainNode && audioCtx) {
+        // Smoothly transition volume to avoid popping sounds
+        gainNode.gain.setTargetAtTime(parseFloat(val), audioCtx.currentTime, 0.1);
+      }
+    }
+
+    function updateNoise(val) {
+      document.getElementById('noiseVal').innerText = val + " Hz";
+      if (rumbleFilter && audioCtx) {
+        rumbleFilter.frequency.setTargetAtTime(parseFloat(val), audioCtx.currentTime, 0.1);
+      }
+    }
+
+    function updateTreble(val) {
+      document.getElementById('trebleVal').innerText = (val > 0 ? "+" : "") + val + " dB";
+      if (trebleFilter && audioCtx) {
+        trebleFilter.gain.setTargetAtTime(parseFloat(val), audioCtx.currentTime, 0.1);
       }
     }
   </script>
