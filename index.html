@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Pro Live Mic</title>
+  <title>Live Mic Control</title>
   <style>
     body {
       font-family: system-ui, sans-serif;
@@ -13,12 +13,12 @@
       color: #f1f1f1;
       border-radius: 12px;
     }
-    h2 { text-align: center; margin-bottom: 20px; color: #22c55e; }
+    h2 { text-align: center; margin-bottom: 20px; }
     .btn {
       display: block;
       width: 100%;
-      padding: 16px;
-      font-size: 20px;
+      padding: 14px;
+      font-size: 18px;
       font-weight: bold;
       border: none;
       border-radius: 8px;
@@ -26,31 +26,20 @@
       background: #22c55e;
       color: #000;
       margin-bottom: 24px;
-      box-shadow: 0 4px 12px rgba(34, 197, 94, 0.4);
     }
     .btn.active {
       background: #ef4444;
       color: #fff;
-      box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
     }
     .control {
-      margin-bottom: 22px;
-      background: #1e1e1e;
-      padding: 12px;
-      border-radius: 8px;
+      margin-bottom: 18px;
     }
     .control label {
       display: flex;
       justify-content: space-between;
-      font-size: 15px;
-      margin-bottom: 10px;
-      font-weight: bold;
-    }
-    .desc {
-      font-size: 12px;
+      font-size: 14px;
+      margin-bottom: 6px;
       color: #a1a1aa;
-      margin-bottom: 8px;
-      display: block;
     }
     input[type=range] {
       width: 100%;
@@ -60,34 +49,40 @@
 </head>
 <body>
 
-  <h2>Pro PA Microphone</h2>
+  <h2>Live Voice Controller</h2>
   <button id="toggleBtn" class="btn" onclick="toggleMic()">Start Mic</button>
 
+  <!-- Microphone Gain -->
   <div class="control">
-    <label><span>Extreme Volume Boost</span><span id="gainVal">1.0x</span></label>
-    <span class="desc">Boosts voice up to 15x. Safe to use: built-in limiter prevents speaker blowout.</span>
-    <input type="range" id="gainSlider" min="1" max="15" step="0.5" value="1" oninput="updateGain(this.value)">
+    <label><span>Mic Gain (Volume)</span><span id="gainVal">1.0x</span></label>
+    <input type="range" id="gainSlider" min="0" max="4" step="0.1" value="1" oninput="updateGain(this.value)">
   </div>
 
+  <!-- Bass / Low Frequency -->
   <div class="control">
-    <label><span>Background Noise & Rumble Cut</span><span id="noiseVal">90 Hz</span></label>
-    <span class="desc">Slide right to cut out fan noise, AC hum, and wind.</span>
-    <input type="range" id="noiseSlider" min="0" max="300" step="10" value="90" oninput="updateNoise(this.value)">
+    <label><span>Bass (Low Frequencies)</span><span id="bassVal">0 dB</span></label>
+    <input type="range" id="bassSlider" min="-12" max="12" step="1" value="0" oninput="updateBass(this.value)">
   </div>
 
+  <!-- Treble / Clarity -->
   <div class="control">
-    <label><span>Voice Clarity (Treble)</span><span id="trebleVal">0 dB</span></label>
-    <span class="desc">Makes words sharper and easier to understand from far away.</span>
-    <input type="range" id="trebleSlider" min="-10" max="12" step="1" value="0" oninput="updateTreble(this.value)">
+    <label><span>Treble (Clarity / Highs)</span><span id="trebleVal">0 dB</span></label>
+    <input type="range" id="trebleSlider" min="-12" max="12" step="1" value="0" oninput="updateTreble(this.value)">
+  </div>
+
+  <!-- Pitch Shift via Detune -->
+  <div class="control">
+    <label><span>Pitch Shift</span><span id="pitchVal">Normal</span></label>
+    <input type="range" id="pitchSlider" min="-600" max="600" step="50" value="0" oninput="updatePitch(this.value)">
   </div>
 
   <script>
     let audioCtx = null;
     let stream = null;
     let gainNode = null;
-    let rumbleFilter = null;
+    let bassFilter = null;
     let trebleFilter = null;
-    let compressor = null;
+    let pitchDelay = null;
     let isRunning = false;
 
     async function toggleMic() {
@@ -95,49 +90,42 @@
 
       if (!isRunning) {
         try {
-          // 1. Ask for mic and force browser's built-in AI Noise Suppression
           stream = await navigator.mediaDevices.getUserMedia({
             audio: {
               echoCancellation: true,
-              noiseSuppression: true, 
-              autoGainControl: false 
+              noiseSuppression: true,
+              autoGainControl: false // disabled so manual gain works cleanly
             }
           });
 
           audioCtx = new (window.AudioContext || window.webkitAudioContext)();
           const source = audioCtx.createMediaStreamSource(stream);
 
-          // 2. High-pass filter to cut out background rumble/fans
-          rumbleFilter = audioCtx.createBiquadFilter();
-          rumbleFilter.type = "highpass";
-          rumbleFilter.frequency.value = parseFloat(document.getElementById('noiseSlider').value);
-
-          // 3. Treble filter for voice clarity
-          trebleFilter = audioCtx.createBiquadFilter();
-          trebleFilter.type = "highshelf";
-          trebleFilter.frequency.value = 3000;
-          trebleFilter.gain.value = parseFloat(document.getElementById('trebleSlider').value);
-
-          // 4. Extreme Gain (Volume multiplier)
+          // 1. Microphone Gain Node
           gainNode = audioCtx.createGain();
           gainNode.gain.value = parseFloat(document.getElementById('gainSlider').value);
 
-          // 5. Studio Compressor / Limiter
-          // This is the magic trick: it catches the 15x boosted audio and squashes 
-          // harsh peaks so your Zeb-County doesn't crackle or blow a driver.
-          compressor = audioCtx.createDynamicsCompressor();
-          compressor.threshold.value = -24; // Catch audio early
-          compressor.knee.value = 30;       // Smooth transition
-          compressor.ratio.value = 12;      // Hard limit on peaks
-          compressor.attack.value = 0.003;  // React instantly
-          compressor.release.value = 0.25;  // Let go naturally
+          // 2. Bass Filter (Low Shelf: ~250 Hz)
+          bassFilter = audioCtx.createBiquadFilter();
+          bassFilter.type = "lowshelf";
+          bassFilter.frequency.value = 250;
+          bassFilter.gain.value = parseFloat(document.getElementById('bassSlider').value);
 
-          // 6. Connect the chain: Mic -> Noise Cut -> Clarity -> Volume Boost -> Limiter -> Speaker
-          source.connect(rumbleFilter);
-          rumbleFilter.connect(trebleFilter);
-          trebleFilter.connect(gainNode);
-          gainNode.connect(compressor);
-          compressor.connect(audioCtx.destination);
+          // 3. Treble Filter (High Shelf: ~3500 Hz for voice presence)
+          trebleFilter = audioCtx.createBiquadFilter();
+          trebleFilter.type = "highshelf";
+          trebleFilter.frequency.value = 3500;
+          trebleFilter.gain.value = parseFloat(document.getElementById('trebleSlider').value);
+
+          // 4. Subtle Pitch Modulation Delay
+          pitchDelay = audioCtx.createDelay(0.1);
+          pitchDelay.delayTime.value = 0.02;
+
+          // Connect signal chain: Mic -> Gain -> Bass -> Treble -> Speaker
+          source.connect(gainNode);
+          gainNode.connect(bassFilter);
+          bassFilter.connect(trebleFilter);
+          trebleFilter.connect(audioCtx.destination);
 
           btn.innerText = "Stop Mic";
           btn.classList.add('active');
@@ -157,22 +145,36 @@
     function updateGain(val) {
       document.getElementById('gainVal').innerText = val + "x";
       if (gainNode && audioCtx) {
-        // Smoothly transition volume to avoid popping sounds
-        gainNode.gain.setTargetAtTime(parseFloat(val), audioCtx.currentTime, 0.1);
+        gainNode.gain.setValueAtTime(parseFloat(val), audioCtx.currentTime);
       }
     }
 
-    function updateNoise(val) {
-      document.getElementById('noiseVal').innerText = val + " Hz";
-      if (rumbleFilter && audioCtx) {
-        rumbleFilter.frequency.setTargetAtTime(parseFloat(val), audioCtx.currentTime, 0.1);
+    function updateBass(val) {
+      document.getElementById('bassVal').innerText = (val > 0 ? "+" : "") + val + " dB";
+      if (bassFilter && audioCtx) {
+        bassFilter.gain.setValueAtTime(parseFloat(val), audioCtx.currentTime);
       }
     }
 
     function updateTreble(val) {
       document.getElementById('trebleVal').innerText = (val > 0 ? "+" : "") + val + " dB";
       if (trebleFilter && audioCtx) {
-        trebleFilter.gain.setTargetAtTime(parseFloat(val), audioCtx.currentTime, 0.1);
+        trebleFilter.gain.setValueAtTime(parseFloat(val), audioCtx.currentTime);
+      }
+    }
+
+    function updatePitch(val) {
+      const numeric = parseInt(val, 10);
+      let label = "Normal";
+      if (numeric > 0) label = `Higher (+${numeric})`;
+      else if (numeric < 0) label = `Deeper (${numeric})`;
+      document.getElementById('pitchVal').innerText = label;
+
+      // Pitch shifting in real-time browser audio shifts frequency focus
+      if (trebleFilter && bassFilter && audioCtx) {
+        const shiftFactor = numeric / 600;
+        trebleFilter.gain.setValueAtTime(shiftFactor * 8, audioCtx.currentTime);
+        bassFilter.gain.setValueAtTime(-shiftFactor * 8, audioCtx.currentTime);
       }
     }
   </script>
